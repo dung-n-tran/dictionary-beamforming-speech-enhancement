@@ -1,6 +1,6 @@
 import numpy as np
 from dlbeamformer_utilities import compute_mvdr_tf_beamformers, check_distortless_constraint
-from tqdm import tnrange, tqdm_notebook
+from tqdm import tnrange, tqdm
 
 class BaseDLBeamformer(object):
     def __init__(self, vs, bf_type="MVDR"):
@@ -18,7 +18,7 @@ class BaseDLBeamformer(object):
         n_training_samples = len(training_data)
         n_fft_bins, n_mics, _ = training_data[0].shape
         D = np.zeros((n_fft_bins, n_mics, n_training_samples), dtype=complex)
-        for i_training_sample in tqdm_notebook(range(n_training_samples), desc="Training sample"):
+        for i_training_sample in tqdm(range(n_training_samples), desc="Training sample"):
             tf_frames_multichannel = training_data[i_training_sample]
             if self.bf_type == "MVDR":
                 w = compute_mvdr_tf_beamformers(self.vs, tf_frames_multichannel)

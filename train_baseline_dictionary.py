@@ -17,7 +17,7 @@ plt.style.use('seaborn-talk')
 
 from scipy.signal import stft, istft, get_window
 from IPython.display import Audio
-from tqdm import tnrange, tqdm_notebook
+from tqdm import tnrange, tqdm
 from dlbeamformer_utilities import compute_steering_vectors_single_frequency,\
     compute_steering_vectors, simulate_multichannel_tf, compute_sinr,\
     compute_mvdr_tf_beamformers, check_distortless_constraint
@@ -90,48 +90,61 @@ source_steering_vectors = compute_steering_vectors(array_geometry, sampling_freq
     np.array([theta_s[0]]), np.array([phi_s[0]]))
 
 
-np.random.seed(random_seed)
-n_interference_list = [1, 2]
-
-azimuth_step = 30
+# Prepare training data
+PREPARE_DATA = True
+azimuth_step = 1
 training_thetas = list(np.arange(-90, 90, azimuth_step))
-
 training_phis = [0]
+n_training_samples = 100
+training_tf_filename = "CMU_ARCTIC_tf_training_data_azimuth_step_{}_trainning_samples_{}.pkl".format(
+        azimuth_step, n_training_samples
+    )
+training_tf_path = "/data/dung/dictionary-beamforming-speech-enhancement/tf_training_data"
+training_tf_filepath = os.path.join(training_tf_path, training_tf_filename)
+if PREPARE_DATA == False:
+    with open(training_tf_filepath, 'rb') as f:
+        training_interference_data = pickle.load(f)    
+else:
+    np.random.seed(random_seed)
+    n_interference_list = [1]
 
-import itertools
-training_interference_data = []
-training_noise_interference_data = []
-np.random.seed(random_seed)
+    import itertools
+    training_interference_data = []
+    training_noise_interference_data = []
+    np.random.seed(random_seed)
 
-for i_n_interference in tqdm_notebook(range(len(n_interference_list)), desc="Interference number"):
-    n_interferences = n_interference_list[i_n_interference]
-    interferences_params = []
-    for i_interference in range(n_interferences):
-        interference_params = list(itertools.product(*[training_thetas, training_phis]))
-        interferences_params.append(interference_params)
-    interferences_param_sets = list(itertools.product(*interferences_params))
+    for i_n_interference in tqdm(range(len(n_interference_list)), desc="Interference number"):
+        n_interferences = n_interference_list[i_n_interference]
+        interferences_params = []
+        for i_interference in range(n_interferences):
+            interference_params = list(itertools.product(*[training_thetas, training_phis]))
+            interferences_params.append(interference_params)
+        interferences_param_sets = list(itertools.product(*interferences_params))
 
-    for i_param_set in tqdm_notebook(range(len(interferences_param_sets)), desc="Parameter set"):    
-        param_set = interferences_param_sets[i_param_set]
-        n_training_samples = 5
-        for i_training_sample in range(n_training_samples):
-            interference_signals = []
-            for i_interference in range(len(param_set)):
-                interference_signal = train_data[np.random.choice(len(train_data))]
-                interference_signals.append(interference_signal)                
-            interference_n_samples = min([len(signal) for signal in interference_signals])
-            
-            interference_tf_multichannel_list = []
-            for i_interference in range(len(param_set)):
-                interference_signals[i_interference] = (interference_signals[i_interference])[0:interference_n_samples]
-                interference_theta, interference_phi = param_set[i_interference]
-                interference_theta += 2*np.random.uniform()
-                interference_tf_multichannel = simulate_multichannel_tf(array_geometry, interference_signal, 
-                        np.array([interference_theta]), np.array([interference_phi]),
-                        sampling_frequency, stft_params)
-                interference_tf_multichannel_list.append(interference_tf_multichannel)
-            training_interference_data.append(sum(interference_tf_multichannel_list))
-            
+        for i_param_set in tqdm(range(len(interferences_param_sets)), desc="Parameter set"):    
+            param_set = interferences_param_sets[i_param_set]
+            for i_training_sample in range(n_training_samples):
+                interference_signals = []
+                for i_interference in range(len(param_set)):
+                    interference_signal = train_data[np.random.choice(len(train_data))]
+                    interference_signals.append(interference_signal)                
+                interference_n_samples = min([len(signal) for signal in interference_signals])
+
+                interference_tf_multichannel_list = []
+                for i_interference in range(len(param_set)):
+                    interference_signals[i_interference] = (interference_signals[i_interference])[0:interference_n_samples]
+                    interference_theta, interference_phi = param_set[i_interference]
+                    interference_theta += 1*np.random.uniform()
+                    interference_tf_multichannel = simulate_multichannel_tf(array_geometry, interference_signal, 
+                            np.array([interference_theta]), np.array([interference_phi]),
+                            sampling_frequency, stft_params)
+                    interference_tf_multichannel_list.append(interference_tf_multichannel)
+                training_interference_data.append(sum(interference_tf_multichannel_list))
+                
+    with open(training_tf_filepath, 'wb') as output:
+        pickle.dump(training_interference_data, output, pickle.HIGHEST_PROTOCOL) 
+
+# Fit dictionary        
 dictionary = BaseDLBeamformer(source_steering_vectors[:, 0, 0, :])
 dictionary.fit(training_interference_data);
 
@@ -139,7 +152,7 @@ dictionary.fit(training_interference_data);
 dict_filename = "baseline_dl_azimuth_step_{}_trainning_samples_{}.pkl".format(
     azimuth_step, n_training_samples
 )
-train_models_path = "trained_models"
+train_models_path = "/data/dung/dictionary-beamforming-speech-enhancement/trained_models"
 dict_filepath = os.path.join(train_models_path, dict_filename)
 with open(dict_filepath, 'wb') as output:
     pickle.dump(dictionary, output, pickle.HIGHEST_PROTOCOL)
