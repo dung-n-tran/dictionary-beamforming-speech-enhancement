@@ -1,5 +1,5 @@
 import numpy as np
-
+from scipy.signal import stft
 SOUND_SPEED = 340 # [m/s]
 # Steering vectors
 def compute_steering_vectors_single_frequency(array_geometry, frequency, theta_grid, phi_grid):
@@ -71,6 +71,7 @@ def compute_mvdr_tf_beamformers(source_steering_vectors, tf_frames_multichannel)
     return mvdr_tf_beamformers
 
 def simulate_multichannel_tf(array_geometry, signal, theta, phi, sampling_frequency, stft_params):
+    n_mics = len(array_geometry[0])
     n_samples_per_frame = stft_params["n_samples_per_frame"]
     n_fft_bins = stft_params["n_fft_bins"]
     hop_size = stft_params["hop_size"]
