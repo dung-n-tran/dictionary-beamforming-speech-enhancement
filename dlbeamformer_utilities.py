@@ -67,8 +67,25 @@ def compute_mvdr_tf_beamformers(source_steering_vectors, tf_frames_multichannel)
         R = tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) + np.identity(n_mics)
         invR = np.linalg.inv(R)
         normalization_factor = source_steering_vectors[i_fft_bin, :].transpose().conjugate().dot(invR).dot(source_steering_vectors[i_fft_bin, :])
-        mvdr_tf_beamformers[i_fft_bin] = invR.dot(source_steering_vectors[i_fft_bin, :]) / normalization_factor
+        mvdr_tf_beamformers[i_fft_bin] = invR.dot(source_steering_vectors[i_fft_bin, :]) / (normalization_factor)
     return mvdr_tf_beamformers
+
+def compute_mvndr_tf_beamformers(source_steering_vectors, tf_frames_multichannel, regularization_param=1):
+    # Minimum variance near-distortless response beamformers
+    # w = argmin w^H*R*w + \lambda * (v_s^H*w - 1)^2
+    n_fft_bins, n_mics = source_steering_vectors.shape
+    mvndr_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
+    for i_fft_bin in range(n_fft_bins):
+#         R = tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) + np.identity(n_mics)
+#         invR = np.linalg.inv(R)
+#         normalization_factor = source_steering_vectors[i_fft_bin, :].transpose().conjugate().dot(invR).dot(source_steering_vectors[i_fft_bin, :])
+#         regularization_param = 1/normalization_factor
+        R = tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate())\
+            + np.identity(n_mics)\
+            + regularization_param*source_steering_vectors[i_fft_bin, :]*source_steering_vectors[i_fft_bin, :].transpose().conjugate()
+        invR = np.linalg.inv(R)
+        mvndr_tf_beamformers[i_fft_bin] = regularization_param*invR.dot(source_steering_vectors[i_fft_bin, :])
+    return mvndr_tf_beamformers
 
 def simulate_multichannel_tf(array_geometry, signal, theta, phi, sampling_frequency, stft_params):
     n_mics = len(array_geometry[0])

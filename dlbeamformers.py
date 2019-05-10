@@ -37,6 +37,7 @@ class BaseDLBeamformer(object):
         for i_dictionary_atom in range(n_dictionary_atoms):
             w_frequency = self.weights_[:, :, i_dictionary_atom]
             energy = 0
+            n_fft_bins = w_frequency.shape[0]
             for i_fft_bin in range(n_fft_bins):
                 w = w_frequency[i_fft_bin]
                 R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
