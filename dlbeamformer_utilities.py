@@ -64,7 +64,8 @@ def compute_mvdr_tf_beamformers(source_steering_vectors, tf_frames_multichannel)
     n_fft_bins, n_mics = source_steering_vectors.shape
     mvdr_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
     for i_fft_bin in range(n_fft_bins):
-        R = tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) + np.identity(n_mics)
+        n_samples = tf_frames_multichannel.shape[1]
+        R = 1./n_samples * ( tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) + np.identity(n_mics) )
         invR = np.linalg.inv(R)
         normalization_factor = source_steering_vectors[i_fft_bin, :].transpose().conjugate().dot(invR).dot(source_steering_vectors[i_fft_bin, :])
         mvdr_tf_beamformers[i_fft_bin] = invR.dot(source_steering_vectors[i_fft_bin, :]) / (normalization_factor)
@@ -87,6 +88,24 @@ def compute_mvndr_tf_beamformers(source_steering_vectors, tf_frames_multichannel
         mvndr_tf_beamformers[i_fft_bin] = regularization_param*invR.dot(source_steering_vectors[i_fft_bin, :])
     return mvndr_tf_beamformers
 
+def compute_lcmv_tf_beamformers(steering_vectors, tf_frames_multichannel, constraint_vector):    
+    n_fft_bins, n_mics, n_steering_vectors = steering_vectors.shape
+    lcmv_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
+    for i_fft_bin in range(n_fft_bins):
+        n_samples = len(tf_frames_multichannel[i_fft_bin])
+        R = 1./n_samples * (tf_frames_multichannel[i_fft_bin].dot(
+                    tf_frames_multichannel[i_fft_bin].transpose().conjugate()) \
+                    + np.identity(n_mics) )
+        invR = np.linalg.inv(R)
+        normalization_matrix = steering_vectors[i_fft_bin, :].transpose().conjugate().dot(
+            invR).dot(steering_vectors[i_fft_bin, :])
+        normalization_matrix = (1 - 1e-3)*normalization_matrix \
+                    + 1e-3*np.trace(normalization_matrix)/n_steering_vectors * np.identity(n_steering_vectors)
+        inverse_normalization_matrix = np.linalg.inv(normalization_matrix)
+        lcmv_tf_beamformers[i_fft_bin] = invR.dot(steering_vectors[i_fft_bin, :]).dot(
+            inverse_normalization_matrix).dot(constraint_vector)
+    return lcmv_tf_beamformers
+    
 def simulate_multichannel_tf(array_geometry, signal, theta, phi, sampling_frequency, stft_params):
     n_mics = len(array_geometry[0])
     n_samples_per_frame = stft_params["n_samples_per_frame"]
