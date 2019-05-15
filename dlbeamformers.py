@@ -1,5 +1,5 @@
 import numpy as np
-from dlbeamformer_utilities import compute_mvdr_tf_beamformers, check_distortless_constraint, compute_steering_vectors
+from dlbeamformer_utilities import compute_mvdr_tf_beamformers, check_distortless_constraint, compute_steering_vectors, compute_null_controlling_tf_beamformers
 from tqdm import tnrange, tqdm
 
 class BaseDLBeamformer(object):
@@ -100,50 +100,77 @@ class DLBeamformer(object):
         return compute_steering_vectors(self.array_geometry,
                     self.sampling_frequency, self.stft_params["n_fft_bins"],
                     self.angle_grid["theta"], self.angle_grid["phi"])
-#     def _compute_weights(self, training_data):
-#         n_training_samples = len(training_data)
-#         n_fft_bins, n_mics, _ = training_data[0].shape
-#         D = np.zeros((n_fft_bins, n_mics, n_training_samples), dtype=complex)
-#         for i_training_sample in tqdm(range(n_training_samples), desc="Training sample"):
-#             tf_frames_multichannel = training_data[i_training_sample]
-#             if self.bf_type == "MVDR":
-#                 w = compute_mvdr_tf_beamformers(self.vs, tf_frames_multichannel)
-# #                 check_distortless_constraint(w, self.vs)
-#             D[:, :, i_training_sample] = w
+    
+    def _compute_weights(self, training_data, desired_null_width, 
+            null_constraint_threshold, eigenvalue_percentage_threshold=0.99):
+        n_training_samples = len(training_data)
+        n_fft_bins, n_mics, _ = training_data[0][0].shape
+        n_sources = len(self.source_steering_vectors)
+        D = np.zeros((n_sources, n_fft_bins, n_mics, n_training_samples), dtype=complex)
+        for i_source in range(n_sources):
+            for i_training_sample in tqdm(range(n_training_samples), desc="Training sample"):
+                tf_frames_multichannel = training_data[i_training_sample][0]
+                null_angle_range = self._compute_null_angle_ranges(
+                    training_data[i_training_sample][1]["theta"], desired_null_width)
+                null_steering_vectors = compute_steering_vectors(
+                    self.array_geometry, self.sampling_frequency,
+                    self.stft_params["n_fft_bins"],
+                    np.unique(null_angle_range), np.unique(training_data[i_training_sample][1]["phi"])
+                )
+                null_steering_vectors = np.transpose(null_steering_vectors[:, :, 0, :], (0, 2, 1))
+                w = compute_null_controlling_tf_beamformers(
+                        self.source_steering_vectors[i_source][:, 0, 0, :], null_steering_vectors, 
+                        tf_frames_multichannel, 
+                        null_constraint_threshold, 
+                        eigenvalue_percentage_threshold=0.99)
+    #             if self.bf_type == "MVDR":
+    #                 w = compute_mvdr_tf_beamformers(self.vs, tf_frames_multichannel)
+    # #                 check_distortless_constraint(w, self.vs)
+                D[i_source, :, :, i_training_sample] = w
             
-#         return D
-
+        return D
+    
+    def _compute_null_angle_ranges(self, null_thetas, desired_null_width):
+        theta_ranges = []
+        for null_theta in null_thetas:
+            theta_ranges.append(
+                np.arange(null_theta - desired_null_width/2,
+                          null_theta + desired_null_width/2, 0.1))
+        return np.concatenate(theta_ranges)
+            
 #     def _initialize(self, X):
 #         pass
 
-#     def _choose_weights(self, x):
-#         n_dictionary_atoms = self.weights_.shape[2]
-#         min_ave_energy = np.inf
-#         optimal_weight_index = None
-#         for i_dictionary_atom in range(n_dictionary_atoms):
-#             w_frequency = self.weights_[:, :, i_dictionary_atom]
-#             energy = 0
-#             n_fft_bins = w_frequency.shape[0]
-#             for i_fft_bin in range(n_fft_bins):
-#                 w = w_frequency[i_fft_bin]
-#                 R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
-#                 energy += np.real(w.transpose().conjugate().dot(R).dot(w))
-#             ave_energy = energy / n_fft_bins
-#             if min_ave_energy > ave_energy:
-#                 min_ave_energy = ave_energy
-#                 optimal_weight_index = i_dictionary_atom
-#         optimal_weight = self.weights_[:, :, optimal_weight_index]
-#         return optimal_weight, optimal_weight_index
+    def _choose_weights(self, source_angle_index, x):
+        weights_ = self.weights_[source_angle_index]
+        n_dictionary_atoms = weights_.shape[-1]
+        min_ave_energy = np.inf
+        optimal_weight_index = None
+        for i_dictionary_atom in range(n_dictionary_atoms):
+            w_frequency = weights_[:, :, i_dictionary_atom]
+            energy = 0
+            n_fft_bins = w_frequency.shape[0]
+            for i_fft_bin in range(n_fft_bins):
+                w = w_frequency[i_fft_bin]
+                R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
+                energy += np.real(w.transpose().conjugate().dot(R).dot(w))
+            ave_energy = energy / n_fft_bins
+            if min_ave_energy > ave_energy:
+                min_ave_energy = ave_energy
+                optimal_weight_index = i_dictionary_atom
+        optimal_weight = weights_[:, :, optimal_weight_index]
+        return optimal_weight, optimal_weight_index
     
-#     def fit(self, training_data):
-#         """
-#         Parameters
-#         ----------
-#         X: shape = [n_samples, n_features]
-#         """
-#         D = self._compute_weights(training_data)
-#         self.weights_ = D
-#         return self
+    def fit(self, training_data, desired_null_width, 
+            null_constraint_threshold, eigenvalue_percentage_threshold=0.99):
+        """
+        Parameters
+        ----------
+        """
+        D = self._compute_weights(training_data, desired_null_width, 
+            null_constraint_threshold, eigenvalue_percentage_threshold=0.99)
+        self.weights_ = D
+        return self
 
-#     def choose_weights(self, x):
-#         return self._choose_weights(x)    
+    def choose_weights(self, source_angle_index, x):
+        return self._choose_weights(source_angle_index, x)    
