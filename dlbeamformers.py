@@ -157,7 +157,7 @@ class DLBeamformer(object):
 #                 optimal_weight_index = i_dictionary_atom
 #         optimal_weight = weights_[:, :, optimal_weight_index]
         optimal_weights = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
-        for i_fft_bin in range(n_fft_bins):
+        for i_fft_bin in tqdm(range(n_fft_bins), desc="FFT bin"):
             R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
             W = weights_[i_fft_bin]
             i_fft_optimal_weight_index = np.argmin(np.diagonal(np.abs(W.transpose().conjugate().dot(
