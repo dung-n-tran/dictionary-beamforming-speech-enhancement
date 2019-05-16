@@ -64,7 +64,7 @@ class BaseDLBeamformer(object):
     
 class DLBeamformer(object):
     def __init__(self, array_geometry, sampling_frequency,
-                 source_angles, stft_params, angle_grid, bf_type="MVDR"):
+                 source_angles, stft_params, angle_grid, bf_type="NC"):
         """
         Parameters
         ----------
@@ -123,9 +123,6 @@ class DLBeamformer(object):
                         tf_frames_multichannel, 
                         null_constraint_threshold, 
                         eigenvalue_percentage_threshold=0.99)
-    #             if self.bf_type == "MVDR":
-    #                 w = compute_mvdr_tf_beamformers(self.vs, tf_frames_multichannel)
-    # #                 check_distortless_constraint(w, self.vs)
                 D[i_source, :, :, i_training_sample] = w
             
         return D
@@ -143,23 +140,30 @@ class DLBeamformer(object):
 
     def _choose_weights(self, source_angle_index, x):
         weights_ = self.weights_[source_angle_index]
-        n_dictionary_atoms = weights_.shape[-1]
-        min_ave_energy = np.inf
-        optimal_weight_index = None
-        for i_dictionary_atom in range(n_dictionary_atoms):
-            w_frequency = weights_[:, :, i_dictionary_atom]
-            energy = 0
-            n_fft_bins = w_frequency.shape[0]
-            for i_fft_bin in range(n_fft_bins):
-                w = w_frequency[i_fft_bin]
-                R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
-                energy += np.real(w.transpose().conjugate().dot(R).dot(w))
-            ave_energy = energy / n_fft_bins
-            if min_ave_energy > ave_energy:
-                min_ave_energy = ave_energy
-                optimal_weight_index = i_dictionary_atom
-        optimal_weight = weights_[:, :, optimal_weight_index]
-        return optimal_weight, optimal_weight_index
+        n_fft_bins, n_mics, n_dictionary_atoms = weights_.shape
+#         min_ave_energy = np.inf
+#         optimal_weight_index = None
+#         for i_dictionary_atom in range(n_dictionary_atoms):
+#             w_frequency = weights_[:, :, i_dictionary_atom]
+#             energy = 0
+#             n_fft_bins = w_frequency.shape[0]
+#             for i_fft_bin in range(n_fft_bins):
+#                 w = w_frequency[i_fft_bin]
+#                 R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
+#                 energy += np.real(w.transpose().conjugate().dot(R).dot(w))
+#             ave_energy = energy / n_fft_bins
+#             if min_ave_energy > ave_energy:
+#                 min_ave_energy = ave_energy
+#                 optimal_weight_index = i_dictionary_atom
+#         optimal_weight = weights_[:, :, optimal_weight_index]
+        optimal_weights = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
+        for i_fft_bin in range(n_fft_bins):
+            R = x[i_fft_bin].dot(x[i_fft_bin].transpose().conjugate())
+            W = weights_[i_fft_bin]
+            i_fft_optimal_weight_index = np.argmin(np.diagonal(np.abs(W.transpose().conjugate().dot(
+                R).dot(W))))
+            optimal_weights[i_fft_bin] = weights_[i_fft_bin, :, i_fft_optimal_weight_index]
+        return optimal_weights
     
     def fit(self, training_data, desired_null_width, 
             null_constraint_threshold, eigenvalue_percentage_threshold=0.99):
