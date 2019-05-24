@@ -26,7 +26,7 @@ def compute_steering_vectors(array_geometry, sampling_frequency, n_fft, theta_gr
     n_mics = len(array_geometry[0])
     steering_vectors = np.zeros((n_fft, n_thetas, n_phis, n_mics), dtype=np.complex64)
     for i_fft in range(n_fft):
-        frequency = (i_fft / n_fft) * (sampling_frequency)
+        frequency = (i_fft / n_fft) * (sampling_frequency/2)
         steering_vectors[i_fft] = compute_steering_vectors_single_frequency(array_geometry, frequency, theta_grid, phi_grid)
         
     return steering_vectors
@@ -60,12 +60,13 @@ def compute_sinr(source_tf_multichannel, interference_tf_multichannel, weights=N
             interference_power += np.trace(interference_tf_multichannel[i_f].dot(interference_tf_multichannel[i_f].transpose().conjugate()))
     return 10*np.log10(np.abs(source_power/interference_power))
     
-def compute_mvdr_tf_beamformers(source_steering_vectors, tf_frames_multichannel):
+def compute_mvdr_tf_beamformers(source_steering_vectors, tf_frames_multichannel, diagonal_loading_param=1):
     n_fft_bins, n_mics = source_steering_vectors.shape
     mvdr_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
     for i_fft_bin in range(n_fft_bins):
-        n_samples = tf_frames_multichannel.shape[1]
-        R = 1./n_samples * ( tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) + 1*np.identity(n_mics) )
+        n_frames = tf_frames_multichannel.shape[1]
+        R = 1./n_frames * tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate()) \
+                + diagonal_loading_param*np.identity(n_mics, dtype=np.complex64)
         invR = np.linalg.inv(R)
         normalization_factor = source_steering_vectors[i_fft_bin, :].transpose().conjugate().dot(invR).dot(source_steering_vectors[i_fft_bin, :])
         mvdr_tf_beamformers[i_fft_bin] = invR.dot(source_steering_vectors[i_fft_bin, :]) / (normalization_factor)
@@ -146,6 +147,44 @@ the frequency-adaptive broadband (FAB) beamformer", bioRxiv
         
     return nc_tf_beamformers
 
+
+def compute_null_controlling_tf_beamformers_2(source_steering_vectors, null_steering_vectors, tf_sample_covariance_batch, 
+        null_constraint_threshold, eigenvalue_percentage_threshold=0.99, diagonal_loading_param=1):
+    n_fft_bins, n_mics, n_null_steering_vectors = null_steering_vectors.shape
+    nc_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
+    for i_fft_bin in range(n_fft_bins):
+        
+        null_steering_correlation_matrix = null_steering_vectors[i_fft_bin].dot(
+            null_steering_vectors[i_fft_bin].transpose().conjugate())
+        eigenvalues, eigenvectors = np.linalg.eigh(null_steering_correlation_matrix)
+        running_sums = np.cumsum(np.abs(eigenvalues[-1::-1]))
+        cutoff_index = np.searchsorted(running_sums, 
+                                       eigenvalue_percentage_threshold * running_sums[-1])
+        eigenvectors = eigenvectors[:, len(eigenvalues)-cutoff_index-1:]
+        steering_vectors = np.hstack((source_steering_vectors[i_fft_bin].reshape(-1, 1), eigenvectors))
+        
+        R = np.sum(tf_sample_covariance_batch[:, i_fft_bin, :, :], axis=0) / len(tf_sample_covariance_batch) + diagonal_loading_param*np.identity(n_mics)
+        invR = np.linalg.inv(R)
+        
+        normalization_matrix = steering_vectors.transpose().conjugate().dot(
+            invR).dot(steering_vectors)
+        
+        """ Regularization for dealing with ill-conditionaed normalization matrix
+        Ref: Matthias Treder, Guido Nolte, "Source reconstruction of broadband EEG/MEG data using
+the frequency-adaptive broadband (FAB) beamformer", bioRxiv
+        Equation (12) in https://www.biorxiv.org/content/biorxiv/early/2018/12/20/502690.full.pdf
+        """
+        normalization_matrix = (1 - 1e-3)*normalization_matrix \
+                    + 1e-3*np.trace(normalization_matrix)/steering_vectors.shape[1] * 10*np.identity(steering_vectors.shape[1])
+        inverse_normalization_matrix = np.linalg.inv(normalization_matrix)
+        
+        constraint_vector = null_constraint_threshold*np.ones(steering_vectors.shape[1])
+        constraint_vector[0] = 1
+        
+        nc_tf_beamformers[i_fft_bin] = invR.dot(steering_vectors).dot(
+            inverse_normalization_matrix).dot(constraint_vector)
+        
+    return nc_tf_beamformers
 def compute_null_controlling_minibatch_tf_beamformers(source_steering_vectors, 
         null_steering_vectors, tf_frames_multichannel_batch, 
         null_constraint_threshold, eigenvalue_percentage_threshold=0.99):
@@ -204,5 +243,55 @@ def simulate_multichannel_tf(array_geometry, signal, theta, phi, sampling_freque
                                 * tf_frames.reshape(tf_frames.shape[0], 1, tf_frames.shape[1])
     return tf_frames_multichannel
 
-def check_distortless_constraint(weight, source_steering_vector):
-    assert(np.abs(weight.transpose().conjugate().dot(source_steering_vector)) - 1 < 1e-9)
+def simulate_multichannel_tf_circular(array_geometry, signal, azimuth, sampling_frequency, stft_params):
+    n_mics = len(array_geometry[0])
+    n_samples_per_frame = stft_params["n_samples_per_frame"]
+    n_fft_bins = stft_params["n_fft_bins"]
+    hop_size = stft_params["hop_size"]
+    stft_window = stft_params["window"]
+    steering_vector = ( compute_steering_vectors_circular(array_geometry, sampling_frequency, stft_params, azimuth) )[:, 0, :]
+    _, _, tf_frames = stft(signal.reshape(-1), fs=sampling_frequency, window=stft_window,
+                             nperseg=n_samples_per_frame, noverlap=n_samples_per_frame-hop_size,
+                             nfft=n_samples_per_frame, padded=True)
+    tf_frames = tf_frames[:-1, 1:-1]
+    tf_frames_multichannel = steering_vector.reshape(n_fft_bins, n_mics, 1)\
+                                * tf_frames.reshape(tf_frames.shape[0], 1, tf_frames.shape[1])
+    return tf_frames_multichannel
+
+def check_distortless_constraint(weight, source_steering_vector, tolerance=1e-9):
+    assert(np.abs(weight.transpose().conjugate().dot(source_steering_vector)) - 1 < tolerance)
+
+def compute_steering_vectors_circular(array_geometry, sampling_frequency, stft_params, azimuth_grid):
+    n_mics = len(array_geometry[0])
+    n_azimuths = len(azimuth_grid)
+    delay = np.zeros((n_azimuths, n_mics), dtype=np.float32)
+    n_samples_per_frame = stft_params["n_samples_per_frame"]
+    n_fft_bins = stft_params["n_fft_bins"]
+    
+    for m in range(n_mics):
+        pos_x = array_geometry[0][m]
+        pos_y = array_geometry[1][m]
+        radius = np.sqrt(pos_x*pos_x + pos_y*pos_y)
+        mic_azimuth = np.arctan2(pos_y, pos_x)
+        for k in range(n_azimuths):
+            azimuth = 2 * np.pi * azimuth_grid[k]/360
+            delay[k][m] = - radius * np.cos(mic_azimuth - azimuth) * sampling_frequency / SOUND_SPEED
+    steering_vectors = np.zeros((n_fft_bins, n_azimuths, n_mics), dtype=np.complex64)
+    for i_fft_bin in range(n_fft_bins):
+        v = 2 * np.pi * (i_fft_bin / n_samples_per_frame) * delay;
+        steering_vectors[i_fft_bin] = np.cos(v) - np.sin(v) * 1j
+    return steering_vectors
+
+def compute_minimum_variance_tf_beamformers(source_steering_vectors, tf_frames_multichannel=None, diagonal_loading_param=1):
+    n_fft_bins, n_mics = source_steering_vectors.shape
+    mvdr_tf_beamformers = np.zeros((n_fft_bins, n_mics), dtype=np.complex64)
+    for i_fft_bin in range(n_fft_bins):
+        R = diagonal_loading_param*np.identity(n_mics, dtype=np.complex64)
+        if tf_frames_multichannel is not None:
+            n_frames = tf_frames_multichannel.shape[1]
+            R += 1./n_frames * tf_frames_multichannel[i_fft_bin].dot(tf_frames_multichannel[i_fft_bin].transpose().conjugate())
+        invR = np.linalg.inv(R)
+        normalization_factor = source_steering_vectors[i_fft_bin].transpose().conjugate().dot(
+            invR).dot(source_steering_vectors[i_fft_bin])
+        mvdr_tf_beamformers[i_fft_bin] = invR.dot(source_steering_vectors[i_fft_bin]) / normalization_factor
+    return mvdr_tf_beamformers
